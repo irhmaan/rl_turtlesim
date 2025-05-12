@@ -1,0 +1,5 @@
+gymnasium==0.29.1
+numpy>=1.23
+rclpy==1.5.0  # Replace with your installed version
+turtlesim==1.4.2  # Replace with your actual version if different
+geometry_msgs>=4.0.0  # Comes with ROS 2, for pip use `ros-<distro>-geometry-msgs` if system supports it

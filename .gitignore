@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.log
+
+# ROS 2
+build/
+install/
+log/
+
+# VSCode or IDEs
+.vscode/
+.idea/
+
+# Python environments
+.env/
+.venv/
+env/
+venv/
