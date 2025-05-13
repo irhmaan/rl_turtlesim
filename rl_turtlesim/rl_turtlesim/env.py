@@ -1,12 +1,27 @@
 import gymnasium as gym
 from gymnasium import spaces
+from enum import IntEnum
 import numpy as np
 import rclpy
 from rclpy.node import Node
 from turtlesim.srv import Spawn, Kill
 from turtlesim.msg import Pose
-from geometry_msgs.msg import Twist, Vector3
+from geometry_msgs.msg import Twist
 import time
+
+
+class Direction(IntEnum):
+    UP = 0       # 0 radians
+    RIGHT = 1    # -π/2
+    DOWN = 2     # π
+    LEFT = 3     # π/2
+
+DIRECTION_TO_ANGLE = {
+    Direction.UP: 0.0,
+    Direction.RIGHT: -np.pi / 2,
+    Direction.DOWN: np.pi,
+    Direction.LEFT: np.pi / 2,
+}
 
 
 class TurtleRLNode(Node):
@@ -69,81 +84,82 @@ class TurtleRLNode(Node):
             future.add_done_callback(callback)
 
 
-
 class TurtleEnv(gym.Env):
     def __init__(self):
         rclpy.init()
         self.node = TurtleRLNode()
-
-        # Normalized action space [-1, 1]
-        self.action_space = spaces.Box(low=np.array([-1.0, -1.0], dtype=np.float32),
-                                       high=np.array([1.0, 1.0], dtype=np.float32))
+        self.previous_obs = None
+        # Discrete enum-based action space: UP, DOWN, LEFT, RIGHT
+        self.action_space = spaces.Discrete(4)
 
         # Observation: [x1, y1, x_enemy, y_enemy]
         self.observation_space = spaces.Box(low=0.0, high=11.0, shape=(4,), dtype=np.float32)
 
         self.done = False
-        # self.episode_steps = 0
-        # self.max_steps = 200
+        self.turtles_caught = 0
 
     def step(self, action):
-        rclpy.spin_once(self.node)
-        obs = self._get_obs()
-        turtle_x, turtle_y, enemy_x, enemy_y = obs
+            rclpy.spin_once(self.node)
 
-        # Calculate the vector to the enemy
-        to_enemy = np.array([enemy_x - turtle_x, enemy_y - turtle_y], dtype=np.float32)
-        distance_to_enemy = np.linalg.norm(to_enemy)
+            if self.node.turtle1_pose is None or self.node.enemy_pose is None:
+                return self._get_obs(), 0.0, False, False, {}
 
-        # Determine the desired linear velocity vector
-        linear_speed_factor = 0.5  # Tune this value
-        if distance_to_enemy > 0.0:
-            linear_velocity_x = linear_speed_factor * (to_enemy[0] / distance_to_enemy) # Normalize and scale
-            linear_velocity_y = linear_speed_factor * (to_enemy[1] / distance_to_enemy) # Normalize and scale
-        else:
-            linear_velocity_x = 0.0
-            linear_velocity_y = 0.0
+            desired_angle = DIRECTION_TO_ANGLE[Direction(action)]
+            current_angle = self.node.turtle1_pose.theta
+            angle_diff = (desired_angle - current_angle + np.pi) % (2 * np.pi) - np.pi
 
-        # Calculate the angle to the enemy for angular movement (optional, but good for alignment)
-        angle_to_enemy = np.arctan2(enemy_y - turtle_y, enemy_x - turtle_x)
-        # Assuming turtle's orientation is 0, adjust if needed
-        angle_diff = angle_to_enemy
-        angular_speed_factor = 1.0 # Tune this value
-        angular = angular_speed_factor * angle_diff
+            twist_msg = Twist()
+            twist_msg.angular.z = float(np.clip(6.0 * angle_diff, -2.0, 2.0))
+            twist_msg.linear.x = 1.5 if abs(angle_diff) < 0.1 else 0.0
 
-        twist_msg = Twist()
-        twist_msg.linear = Vector3(x=float(linear_velocity_x), y=float(linear_velocity_y), z=0.0)
-        twist_msg.angular = Vector3(x=0.0, y=0.0, z=float(angular))
-        self.node.cmd_pub.publish(twist_msg)
 
-        rclpy.spin_once(self.node)
-        obs = self._get_obs()
+            if action == Direction.UP:
+                twist_msg.linear.x = 1.0
+                twist_msg.angular.z = 0.0
+            elif action == Direction.DOWN:
+                twist_msg.linear.x = -1.0
+                twist_msg.angular.z = 0.0
+            elif action == Direction.LEFT:
+                twist_msg.linear.x = 0.0
+                twist_msg.angular.z = 1.5
+            elif action == Direction.RIGHT:
+                twist_msg.linear.x = 0.0
+                twist_msg.angular.z = -1.5
 
-        dist = np.linalg.norm(obs[0:2] - obs[2:4])
-        reward = -0.01  # Time penalty
-        terminated = False
+            self.node.cmd_pub.publish(twist_msg)
+            time.sleep(0.1)
+            rclpy.spin_once(self.node)
 
-        if dist < 0.5:
-            reward += 10.0
-            self.turtles_caught += 1
-            self._reset_enemy()
-            terminated = True
-        elif obs[0] < 0.5 or obs[0] > 10.5 or obs[1] < 0.5 or obs[1] > 10.5:
-            reward -= 5.0  # Boundary penalty
-            terminated = True
+            obs = self._get_obs()
+            dist = np.linalg.norm(obs[0:2] - obs[2:4])
+            reward = -0.01
+            terminated = False
 
-        return obs, reward, terminated, False, {"turtles_caught": self.turtles_caught}
-    
+            # Reward for getting closer
+            prev_dist = np.linalg.norm(self.previous_obs[0:2] - self.previous_obs[2:4]) if hasattr(self, 'previous_obs') and self.previous_obs is not None else dist
+            reward += (prev_dist - dist) * 0.1  # Adjust the scaling factor as needed
+
+            if dist < 0.5:
+                reward += 10.0
+                self.turtles_caught += 1
+                self._reset_enemy()
+                terminated = True
+            elif obs[0] < 0.5 or obs[0] > 10.5 or obs[1] < 0.5 or obs[1] > 10.5:
+                reward -= 1.0  # Negative reward for going out of bounds
+                # Do NOT set terminated to True here
+
+            self.previous_obs = obs
+            return obs, reward, terminated, False, {"turtles_caught": self.turtles_caught}
 
     def reset(self, seed=None, options=None):
-        super().reset(seed=seed)
-        # self.episode_steps = 0
-        self.turtles_caught = 0
-        self.prev_obs = None # Initialize previous observation
-        self._reset_enemy()
-        while self.node.turtle1_pose is None or self.node.enemy_pose is None:
-            rclpy.spin_once(self.node)
-        return self._get_obs(), {}
+            super().reset(seed=seed)
+            self.turtles_caught = 0
+            self._reset_enemy()
+            while self.node.turtle1_pose is None or self.node.enemy_pose is None:
+                rclpy.spin_once(self.node)
+            initial_obs = self._get_obs()
+            self.previous_obs = initial_obs
+            return initial_obs, {}
 
     def _reset_enemy(self):
         try:
@@ -155,7 +171,7 @@ class TurtleEnv(gym.Env):
         time.sleep(0.2)
         while self.node.enemy_pose is None:
             rclpy.spin_once(self.node)
-            
+
     def _get_obs(self):
         t = self.node.turtle1_pose
         e = self.node.enemy_pose
@@ -164,5 +180,3 @@ class TurtleEnv(gym.Env):
     def close(self):
         self.node.destroy_node()
         rclpy.shutdown()
-
- 
