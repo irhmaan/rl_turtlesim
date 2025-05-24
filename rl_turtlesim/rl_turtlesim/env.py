@@ -137,19 +137,19 @@ class TurtleEnv(gym.Env):
 
             # Reward for getting closer
             prev_dist = np.linalg.norm(self.previous_obs[0:2] - self.previous_obs[2:4]) if hasattr(self, 'previous_obs') and self.previous_obs is not None else dist
-            reward += (prev_dist - dist) * 0.1  # Adjust the scaling factor as needed
+            reward += float((prev_dist - dist) * 0.3 ) # Adjust the scaling factor as needed
 
             if dist < 0.5:
                 reward += 10.0
                 self.turtles_caught += 1
                 self._reset_enemy()
-                terminated = True
-            elif obs[0] < 0.5 or obs[0] > 10.5 or obs[1] < 0.5 or obs[1] > 10.5:
+            elif obs[0] < 0.5 or  obs[1] < 0.5 :
                 reward -= 1.0  # Negative reward for going out of bounds
-                # Do NOT set terminated to True here
+            elif obs[0] > 10.5 or obs[1] > 10.5:
+                reward -= 3.5 # more aggresive reward for going near to the boundary
 
             self.previous_obs = obs
-            return obs, reward, terminated, False, {"turtles_caught": self.turtles_caught}
+            return obs, reward,  {"turtles_caught": self.turtles_caught}
 
     def reset(self, seed=None, options=None):
             super().reset(seed=seed)

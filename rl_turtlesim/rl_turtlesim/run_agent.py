@@ -8,5 +8,5 @@ obs, _ = env.reset()
 done = False
 while not done:
     action, _ = model.predict(obs)
-    obs, reward, done, status, res = env.step(action)
-    print(f"Obs: {obs}, Reward: {reward}, Status: {done}, Caught: {res['turtles_caught']}")
+    obs, reward, res = env.step(action)
+    print(f"Obs: {obs}, Reward: {reward}, Caught: {res['turtles_caught']}")
